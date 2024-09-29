@@ -1,5 +1,6 @@
 #include "../vendor/raylib/include/raylib.h"
 
+#include <cstdlib>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -12,16 +13,11 @@ template <typename T>
 using Vector = std::vector<T>;
 
 struct Word {
-    String  content;
-    Vector2 pos;
+    String               content;
+    Vector2              pos;
 };
 
-enum class Mode {
-    NORMAL,
-    INSERT,
-    SELECT,
-    COMMAND
-};
+enum class Mode { NORMAL, INSERT, SELECT, COMMAND };
 
 struct Buffer {
     Vector2              pos;
@@ -47,18 +43,21 @@ struct ModalProps {
 // @TODO: ADD MINIBUFFER
 // The system should have a mini buffer
 struct MiniBuffer {
+    struct LineBar {
+        Vector2          pos;
+        Vector2          measures;
+        Color            fontColor;
+        int              spacing;
+    };
+
     Vector2              cursor;
     String               content;
-    Color                color;
     Vector2              pos;
-    int                  spacing;
+    float                fontSize;
+    LineBar              lineBar;
 };
 
-struct StatusBar {
-    Vector2              pos;
-};
-
-void buffer_draw_modal(const ModalProps& modalProps) {
+void draw_modal(const ModalProps& modalProps) {
     while (!IsKeyPressed(KEY_ESCAPE)) {
         DrawRectangle(modalProps.posX, modalProps.posY, modalProps.width, modalProps.height, DARKGRAY);
         DrawRectangleLines(modalProps.posX, modalProps.posY, modalProps.width, modalProps.height, RAYWHITE);
@@ -70,8 +69,61 @@ void buffer_initialize(Buffer& buffer) {
     buffer.cursor   = {0, 0};
     buffer.mode     = Mode::NORMAL;
     buffer.spacing  = 7;
-    buffer.fontSize = 20;
+   buffer.fontSize = 20;
     buffer.lines.push_back(Vector<Word>());
+}
+
+void mini_buffer_initialize(MiniBuffer& minibuffer) {
+    minibuffer.content           = "";
+    minibuffer.lineBar.spacing   = 7;
+    minibuffer.fontSize          = 20;
+    minibuffer.lineBar.fontColor = RAYWHITE;
+    minibuffer.lineBar.pos       = { 10, (GetScreenHeight() - minibuffer.fontSize) };
+    minibuffer.cursor            = { 10, minibuffer.lineBar.pos.y };
+}
+
+float buffer_cursor_measure_text(const MiniBuffer& minibuffer) {
+    return MeasureText(minibuffer.content.c_str(), minibuffer.fontSize) + minibuffer.lineBar.spacing;
+}
+
+float buffer_cursor_measure_text(const Buffer& buffer, int idx) {
+    return MeasureText(buffer.lines[buffer.cursor.y][idx].content.c_str(), buffer.fontSize) + buffer.spacing;
+}
+
+void mini_buffer_insert_char(char userInput, MiniBuffer& minibuffer) {
+    if (userInput >= 32 && userInput <= 126) {
+        minibuffer.content.push_back(userInput);
+        minibuffer.cursor.x = buffer_cursor_measure_text(minibuffer);
+    }
+}
+
+void mini_buffer_delete_char(MiniBuffer& minibuffer) {
+    if (!minibuffer.content.empty()) {
+        minibuffer.content.pop_back();
+        minibuffer.cursor.x = buffer_cursor_measure_text(minibuffer);
+    }
+}
+
+void mini_buffer_handle_input(MiniBuffer& minibuffer) {
+    char key = GetCharPressed();
+    while (key > 0) {
+        if (IsKeyPressed(KEY_BACKSPACE)) {
+            mini_buffer_delete_char(minibuffer);
+        } else if (key >= 32 && key <= 126) {
+            mini_buffer_insert_char(key, minibuffer);
+        }
+        key = GetCharPressed();
+    }
+}
+
+void mini_buffer_draw_cursor(MiniBuffer& minibuffer) {
+    DrawRectangleLines(minibuffer.cursor.x, GetScreenHeight() - minibuffer.fontSize, 3, minibuffer.fontSize, RED);
+}
+
+void mini_buffer_draw(MiniBuffer& minibuffer) {
+    DrawRectangle(0, GetScreenHeight() - minibuffer.fontSize, GetScreenWidth(), minibuffer.fontSize * 2, DARKGRAY);
+    DrawText(minibuffer.content.c_str(), 10, GetScreenHeight() - minibuffer.fontSize, minibuffer.fontSize, minibuffer.lineBar.fontColor);
+    mini_buffer_draw_cursor(minibuffer);
 }
 
 bool buffer_is_insert_mode(const Buffer& buffer) {
@@ -87,7 +139,9 @@ bool buffer_is_command_mode(const Buffer& buffer) {
 }
 
 void buffer_enable_insert_mode(Buffer& buffer) {
-    buffer.mode = Mode::INSERT;
+    if (buffer_is_normal_mode(buffer)) {
+        buffer.mode = Mode::INSERT;
+    }
 }
 
 void buffer_enable_normal_mode(Buffer& buffer) {
@@ -115,7 +169,7 @@ void buffer_handle_mode(Buffer& buffer) {
     if (buffer.lastCharPressed == KEY_COLON) buffer_enable_command_mode(buffer);
 }
 
-void cursor_move_left(Buffer& buffer) {
+void buffer_cursor_move_left(Buffer& buffer) {
     if (buffer.cursor.x > 0) {
         buffer.cursor.x--;
     } else if (buffer.cursor.y > 0) {
@@ -124,7 +178,7 @@ void cursor_move_left(Buffer& buffer) {
     }
 }
 
-void cursor_move_right(Buffer& buffer) {
+void buffer_cursor_move_right(Buffer& buffer) {
     if (buffer.cursor.x < buffer.lines[buffer.cursor.y].size()) {
         buffer.cursor.x++;
     } else if (buffer.cursor.y < buffer.lines.size() - 1) {
@@ -133,14 +187,14 @@ void cursor_move_right(Buffer& buffer) {
     }
 }
 
-void cursor_move_up(Buffer& buffer) {
+void buffer_cursor_move_up(Buffer& buffer) {
     if (buffer.cursor.y > 0) {
         buffer.cursor.y--;
         buffer.cursor.x = std::min((int)buffer.cursor.x, (int)buffer.lines[buffer.cursor.y].size());
     }
 }
 
-void cursor_move_down(Buffer& buffer) {
+void buffer_cursor_move_down(Buffer& buffer) {
     if (buffer.cursor.y < buffer.lines.size() - 1) {
         buffer.cursor.y++;
         buffer.cursor.x = std::min((int)buffer.cursor.x, (int)buffer.lines[buffer.cursor.y].size());
@@ -148,10 +202,10 @@ void cursor_move_down(Buffer& buffer) {
 }
 
 void buffer_handle_cursor_movement(Buffer& buffer) {
-    if (IsKeyPressed(KEY_LEFT))  cursor_move_left(buffer);
-    if (IsKeyPressed(KEY_RIGHT)) cursor_move_right(buffer);
-    if (IsKeyPressed(KEY_UP))    cursor_move_up(buffer);
-    if (IsKeyPressed(KEY_DOWN))  cursor_move_down(buffer);
+    if (IsKeyPressed(KEY_LEFT))  buffer_cursor_move_left(buffer);
+    if (IsKeyPressed(KEY_RIGHT)) buffer_cursor_move_right(buffer);
+    if (IsKeyPressed(KEY_UP))    buffer_cursor_move_up(buffer);
+    if (IsKeyPressed(KEY_DOWN))  buffer_cursor_move_down(buffer);
 }
 
 void buffer_insert_char(Buffer& buffer, char c) {
@@ -200,7 +254,7 @@ void buffer_handle_text_input(Buffer& buffer) {
 void buffer_draw_cursor(const Buffer& buffer) {
     float x_offset = 10;
     for (int idx = 0; idx < buffer.cursor.x; idx++) {
-        x_offset += MeasureText(buffer.lines[buffer.cursor.y][idx].content.c_str(), buffer.fontSize) + buffer.spacing;
+        x_offset += buffer_cursor_measure_text(buffer, idx);
     }
     
     float y_offset = 10 + buffer.cursor.y * buffer.fontSize;
@@ -224,7 +278,7 @@ void buffer_draw(const Buffer& buffer) {
     buffer_draw_cursor(buffer);
 }
 
-void buffer_save_modal_error() {
+void save_modal_error() {
     int width = 120, height = 70;
     ModalProps modalProps {
         width, 
@@ -238,16 +292,16 @@ void buffer_save_modal_error() {
 
     BeginDrawing();
         ClearBackground(BLACK);
-        buffer_draw_modal(modalProps);
+        draw_modal(modalProps);
     EndDrawing();
 }
 
-void buffer_save(Buffer& buffer) {
+void save(Buffer& buffer) {
     buffer.name = "./first_file.txt";
     std::ofstream outputFile(buffer.name);
 
     if (!outputFile.is_open()) {
-        return buffer_save_modal_error();
+        return save_modal_error();
     }
 
     for (const auto& line : buffer.lines) {
@@ -260,9 +314,28 @@ void buffer_save(Buffer& buffer) {
     outputFile.close();
 }
 
-void buffer_handle_command(Buffer& buffer) {
-    if (buffer_is_command_mode(buffer) && IsKeyPressed(KEY_W)) {
-        buffer_save(buffer);
+void buffer_exit() {
+    EndDrawing();
+    CloseWindow();
+    exit (EXIT_SUCCESS);
+}
+
+void buffer_handle_command(Buffer& buffer, MiniBuffer& minibuffer) {
+    if (buffer_is_command_mode(buffer)) {
+        mini_buffer_handle_input(minibuffer);
+        mini_buffer_draw(minibuffer);
+    
+        if (IsKeyPressed(KEY_ENTER) && !minibuffer.content.empty()) {
+            if (minibuffer.content.length() == 1) {
+                switch (minibuffer.content[0]) {
+                    case 'w': save(buffer); break;
+                    case 'q': buffer_exit(); break;
+                }
+            }
+
+            minibuffer.content.clear();
+            buffer.mode = Mode::NORMAL;
+        }
     }
 }
 
@@ -279,24 +352,27 @@ void close_graphics() {
 void run_editor() {
     Buffer buffer;
     buffer_initialize(buffer);
+
+    MiniBuffer miniBuffer;
+    mini_buffer_initialize(miniBuffer);
+
     initialize_graphics();
-
-    while (!WindowShouldClose()) {
-        BeginDrawing();
-
-            buffer_handle_text_input(buffer);
-            buffer_handle_mode(buffer);
-            buffer_handle_cursor_movement(buffer);
-            buffer_handle_command(buffer);
-            buffer_draw(buffer);
-
-        EndDrawing();
-    }
-
+        while (!WindowShouldClose()) {
+            BeginDrawing();
+                buffer_handle_text_input(buffer);
+                buffer_handle_mode(buffer);
+                buffer_handle_cursor_movement(buffer);
+                buffer_handle_command(buffer, miniBuffer);
+                buffer_draw(buffer);
+            EndDrawing();
+        }
     close_graphics();
 }
 
 int main() {
+    // @TODO: CRUD OF FILES...
+    // @TODO: FILE TREE or FILE EXPLORER...
+    // @TODO: MUST HAVE AN ARRAY OF EDITORS...
     run_editor();
     return 0;
 }
