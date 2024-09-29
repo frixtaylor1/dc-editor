@@ -20,6 +20,7 @@ struct Word {
 enum class Mode { NORMAL, INSERT, SELECT, COMMAND };
 
 struct Buffer {
+    int                  leftMargin;
     Vector2              pos;
     Vector<Vector<Word>> lines;
     Vector2              cursor;
@@ -66,10 +67,11 @@ void draw_modal(const ModalProps& modalProps) {
 }
 
 void buffer_initialize(Buffer& buffer) {
-    buffer.cursor   = {0, 0};
-    buffer.mode     = Mode::NORMAL;
-    buffer.spacing  = 7;
-   buffer.fontSize = 20;
+    buffer.leftMargin = 10;
+    buffer.cursor     = {0, 0};
+    buffer.mode       = Mode::NORMAL;
+    buffer.spacing    = 7;
+    buffer.fontSize   = 20;
     buffer.lines.push_back(Vector<Word>());
 }
 
@@ -78,7 +80,8 @@ void mini_buffer_initialize(MiniBuffer& minibuffer) {
     minibuffer.lineBar.spacing   = 7;
     minibuffer.fontSize          = 20;
     minibuffer.lineBar.fontColor = RAYWHITE;
-    minibuffer.lineBar.pos       = { 10, (GetScreenHeight() - minibuffer.fontSize) };
+    minibuffer.lineBar.pos.x     = 10;
+    minibuffer.lineBar.pos.y     = GetScreenHeight() - minibuffer.fontSize;
     minibuffer.cursor            = { 10, minibuffer.lineBar.pos.y };
 }
 
@@ -117,12 +120,12 @@ void mini_buffer_handle_input(MiniBuffer& minibuffer) {
 }
 
 void mini_buffer_draw_cursor(MiniBuffer& minibuffer) {
-    DrawRectangleLines(minibuffer.cursor.x, GetScreenHeight() - minibuffer.fontSize, 3, minibuffer.fontSize, RED);
+    DrawRectangleLines(minibuffer.cursor.x, minibuffer.lineBar.pos.y, 3, minibuffer.fontSize, RED);
 }
 
 void mini_buffer_draw(MiniBuffer& minibuffer) {
-    DrawRectangle(0, GetScreenHeight() - minibuffer.fontSize, GetScreenWidth(), minibuffer.fontSize * 2, DARKGRAY);
-    DrawText(minibuffer.content.c_str(), 10, GetScreenHeight() - minibuffer.fontSize, minibuffer.fontSize, minibuffer.lineBar.fontColor);
+    DrawRectangle(0, minibuffer.lineBar.pos.y, GetScreenWidth(), minibuffer.fontSize * 2, DARKGRAY);
+    DrawText(minibuffer.content.c_str(), minibuffer.lineBar.pos.x, minibuffer.lineBar.pos.y, minibuffer.fontSize, minibuffer.lineBar.fontColor);
     mini_buffer_draw_cursor(minibuffer);
 }
 
@@ -160,13 +163,20 @@ void buffer_enable_command_mode(Buffer& buffer) {
     }
 }
 
+typedef bool (*BufferEventCondition)(int);
+typedef void (*BufferEventHandler)(Buffer&);
+
+void buffer_handle_event(int inputKey, Buffer& buffer, BufferEventCondition condition, BufferEventHandler handler) {
+    if (condition(inputKey)) handler(buffer);
+}
+
 void buffer_handle_mode(Buffer& buffer) {
     if (buffer_is_normal_mode(buffer)) buffer.lastCharPressed = GetCharPressed();
-
-    if (IsKeyPressed(KEY_I))                 buffer_enable_insert_mode(buffer);
-    if (IsKeyPressed(KEY_ESCAPE))            buffer_enable_normal_mode(buffer);
-    if (IsKeyPressed(KEY_V))                 buffer_enable_select_mode(buffer);
     if (buffer.lastCharPressed == KEY_COLON) buffer_enable_command_mode(buffer);
+
+    buffer_handle_event(KEY_I,      buffer, &IsKeyPressed, &buffer_enable_insert_mode);
+    buffer_handle_event(KEY_ESCAPE, buffer, &IsKeyPressed, &buffer_enable_normal_mode);
+    buffer_handle_event(KEY_V,      buffer, &IsKeyPressed, &buffer_enable_select_mode);
 }
 
 void buffer_cursor_move_left(Buffer& buffer) {
@@ -202,10 +212,10 @@ void buffer_cursor_move_down(Buffer& buffer) {
 }
 
 void buffer_handle_cursor_movement(Buffer& buffer) {
-    if (IsKeyPressed(KEY_LEFT))  buffer_cursor_move_left(buffer);
-    if (IsKeyPressed(KEY_RIGHT)) buffer_cursor_move_right(buffer);
-    if (IsKeyPressed(KEY_UP))    buffer_cursor_move_up(buffer);
-    if (IsKeyPressed(KEY_DOWN))  buffer_cursor_move_down(buffer);
+    buffer_handle_event(KEY_RIGHT, buffer, &IsKeyPressed, &buffer_cursor_move_right);
+    buffer_handle_event(KEY_LEFT,  buffer, &IsKeyPressed, &buffer_cursor_move_left);
+    buffer_handle_event(KEY_UP,    buffer, &IsKeyPressed, &buffer_cursor_move_up);
+    buffer_handle_event(KEY_DOWN,  buffer, &IsKeyPressed, &buffer_cursor_move_down);
 }
 
 void buffer_insert_char(Buffer& buffer, char c) {
@@ -221,16 +231,14 @@ void buffer_insert_char(Buffer& buffer, char c) {
     buffer.cursor.x++;
 }
 
-void buffer_new_line(Buffer& buffer) {
-    if (IsKeyPressed(KEY_ENTER)) {
-        buffer.lines.insert(buffer.lines.begin() + buffer.cursor.y + 1, Vector<Word>());
-        buffer.cursor.y++;
-        buffer.cursor.x = 0;
-    }
+void buffer_add_new_line(Buffer& buffer) {
+    buffer.lines.insert(buffer.lines.begin() + buffer.cursor.y + 1, Vector<Word>());
+    buffer.cursor.y++;
+    buffer.cursor.x = 0;
 }
 
 void buffer_delete_char(Buffer& buffer) {
-    if (IsKeyPressed(KEY_BACKSPACE) && buffer.cursor.x > 0) {
+    if (buffer.cursor.x > 0) {
         buffer.lines[buffer.cursor.y].erase(buffer.lines[buffer.cursor.y].begin() + buffer.cursor.x - 1);
         buffer.cursor.x--;
     }
@@ -247,12 +255,12 @@ void buffer_handle_text_input(Buffer& buffer) {
         key = GetCharPressed();
     }
 
-    buffer_new_line(buffer);
-    buffer_delete_char(buffer);
+    buffer_handle_event(KEY_ENTER,     buffer, &IsKeyPressed, &buffer_add_new_line);
+    buffer_handle_event(KEY_BACKSPACE, buffer, &IsKeyPressed, &buffer_delete_char);
 }
 
 void buffer_draw_cursor(const Buffer& buffer) {
-    float x_offset = 10;
+    float x_offset = buffer.leftMargin;
     for (int idx = 0; idx < buffer.cursor.x; idx++) {
         x_offset += buffer_cursor_measure_text(buffer, idx);
     }
@@ -350,13 +358,14 @@ void close_graphics() {
 }
 
 void run_editor() {
+    initialize_graphics();
+
     Buffer buffer;
     buffer_initialize(buffer);
 
     MiniBuffer miniBuffer;
     mini_buffer_initialize(miniBuffer);
 
-    initialize_graphics();
         while (!WindowShouldClose()) {
             BeginDrawing();
                 buffer_handle_text_input(buffer);
@@ -366,6 +375,7 @@ void run_editor() {
                 buffer_draw(buffer);
             EndDrawing();
         }
+
     close_graphics();
 }
 
