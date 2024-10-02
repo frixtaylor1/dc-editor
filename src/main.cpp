@@ -1,7 +1,6 @@
 #include "../vendor/raylib/include/raylib.h"
 
 #include <cstdlib>
-#include <iostream>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -59,11 +58,9 @@ struct MiniBuffer {
 };
 
 void draw_modal(const ModalProps& modalProps) {
-    while (!IsKeyPressed(KEY_ESCAPE)) {
-        DrawRectangle(modalProps.posX, modalProps.posY, modalProps.width, modalProps.height, DARKGRAY);
-        DrawRectangleLines(modalProps.posX, modalProps.posY, modalProps.width, modalProps.height, RAYWHITE);
-        DrawText(modalProps.content, modalProps.posX + modalProps.contentMarginX, modalProps.posY + modalProps.contentMarginY, 14, RED);
-    }
+    DrawRectangle(modalProps.posX, modalProps.posY, modalProps.width, modalProps.height, DARKGRAY);
+    DrawRectangleLines(modalProps.posX, modalProps.posY, modalProps.width, modalProps.height, RAYWHITE);
+    DrawText(modalProps.content, modalProps.posX + modalProps.contentMarginX, modalProps.posY + modalProps.contentMarginY, 14, RED);
 }
 
 void buffer_initialize(Buffer& buffer) {
@@ -107,16 +104,39 @@ void mini_buffer_delete_char(MiniBuffer& minibuffer) {
     }
 }
 
+typedef bool (*BufferEventCondition)(int);
+typedef bool (*MiniBufferEventCondition)(int);
+typedef void (*BufferEventHandler)(Buffer&);
+typedef void (*MiniBufferEventHandler)(MiniBuffer&);
+typedef void (*MiniBufferEventHandlerWithChar)(char key, MiniBuffer&);
+
+void buffer_handle_event(int inputKey, Buffer& buffer, BufferEventCondition condition, BufferEventHandler handler) {
+    if (condition(inputKey)) handler(buffer);
+}
+
+void buffer_handle_event(bool condition, Buffer& buffer, BufferEventHandler handler) {
+    if (condition) handler(buffer);
+}
+
+void buffer_handle_event(int inputKey, MiniBuffer& minibuffer, MiniBufferEventCondition condition, MiniBufferEventHandler handler) {
+    if (condition(inputKey)) handler(minibuffer);
+}
+
+void buffer_handle_event(int inputKey, MiniBuffer& minibuffer, MiniBufferEventCondition condition, MiniBufferEventHandlerWithChar handler) {
+    if (condition(inputKey)) handler(inputKey, minibuffer);
+}
+
+bool mini_buffer_is_printable_char(int key) {
+    return key >= 32 && key <= 126;
+}
+
 void mini_buffer_handle_input(MiniBuffer& minibuffer) {
     char key = GetCharPressed();
     while (key > 0) {
-        if (IsKeyPressed(KEY_BACKSPACE)) {
-            mini_buffer_delete_char(minibuffer);
-        } else if (key >= 32 && key <= 126) {
-            mini_buffer_insert_char(key, minibuffer);
-        }
-        key = GetCharPressed();
+        buffer_handle_event(key, minibuffer, &mini_buffer_is_printable_char, &mini_buffer_insert_char);
+        key = GetCharPressed();    
     }
+    buffer_handle_event(KEY_BACKSPACE, minibuffer, &IsKeyPressed, &mini_buffer_delete_char);
 }
 
 void mini_buffer_draw_cursor(MiniBuffer& minibuffer) {
@@ -163,20 +183,14 @@ void buffer_enable_command_mode(Buffer& buffer) {
     }
 }
 
-typedef bool (*BufferEventCondition)(int);
-typedef void (*BufferEventHandler)(Buffer&);
-
-void buffer_handle_event(int inputKey, Buffer& buffer, BufferEventCondition condition, BufferEventHandler handler) {
-    if (condition(inputKey)) handler(buffer);
-}
-
 void buffer_handle_mode(Buffer& buffer) {
-    if (buffer_is_normal_mode(buffer)) buffer.lastCharPressed = GetCharPressed();
-    if (buffer.lastCharPressed == KEY_COLON) buffer_enable_command_mode(buffer);
-
     buffer_handle_event(KEY_I,      buffer, &IsKeyPressed, &buffer_enable_insert_mode);
-    buffer_handle_event(KEY_ESCAPE, buffer, &IsKeyPressed, &buffer_enable_normal_mode);
     buffer_handle_event(KEY_V,      buffer, &IsKeyPressed, &buffer_enable_select_mode);
+    buffer_handle_event(KEY_ESCAPE, buffer, &IsKeyPressed, &buffer_enable_normal_mode);
+
+    if (buffer_is_normal_mode(buffer)) {
+        buffer_handle_event((GetCharPressed() == KEY_COLON), buffer, &buffer_enable_command_mode);    
+    }
 }
 
 void buffer_cursor_move_left(Buffer& buffer) {
@@ -221,7 +235,7 @@ void buffer_handle_cursor_movement(Buffer& buffer) {
 void buffer_insert_char(Buffer& buffer, char c) {
     Word word;
     word.content = String(1, c);
-    word.pos = {0, 0};
+    word.pos     = {0, 0};
 
     if (buffer.lines[buffer.cursor.y].empty()) {
         buffer.lines[buffer.cursor.y].push_back(word);
@@ -265,8 +279,7 @@ void buffer_draw_cursor(const Buffer& buffer) {
         x_offset += buffer_cursor_measure_text(buffer, idx);
     }
     
-    float y_offset = 10 + buffer.cursor.y * buffer.fontSize;
-    
+    float y_offset = buffer.leftMargin + buffer.cursor.y * buffer.fontSize;
     DrawRectangleLines((int)x_offset, (int)y_offset, 2, (int)buffer.fontSize, GetColor(0x4388c1b3));
 }
 
@@ -274,7 +287,7 @@ void buffer_draw(const Buffer& buffer) {
     ClearBackground(GetColor(0x181818FF));
 
     for (size_t y = 0; y < buffer.lines.size(); y++) {
-        float x_offset = 10;
+        float x_offset = buffer.leftMargin;
         float y_offset = 10 + y * buffer.fontSize;
 
         for (const Word& word : buffer.lines[y]) {
@@ -298,10 +311,8 @@ void save_modal_error() {
         "Error saving file!"
     };
 
-    BeginDrawing();
-        ClearBackground(BLACK);
-        draw_modal(modalProps);
-    EndDrawing();
+    ClearBackground(BLACK);
+    draw_modal(modalProps);
 }
 
 void save(Buffer& buffer) {
@@ -322,10 +333,17 @@ void save(Buffer& buffer) {
     outputFile.close();
 }
 
-void buffer_exit() {
+void buffer_exit(Buffer& buffer) {
+    buffer.lines.clear();
     EndDrawing();
     CloseWindow();
     exit (EXIT_SUCCESS);
+}
+
+typedef void (MiniBufferCommandHandler)(Buffer& buffer);
+
+void mini_buffer_execute_command(Buffer& buffer, bool condition, MiniBufferCommandHandler handler) {
+    if (condition) handler(buffer);
 }
 
 void buffer_handle_command(Buffer& buffer, MiniBuffer& minibuffer) {
@@ -334,12 +352,8 @@ void buffer_handle_command(Buffer& buffer, MiniBuffer& minibuffer) {
         mini_buffer_draw(minibuffer);
     
         if (IsKeyPressed(KEY_ENTER) && !minibuffer.content.empty()) {
-            if (minibuffer.content.length() == 1) {
-                switch (minibuffer.content[0]) {
-                    case 'w': save(buffer); break;
-                    case 'q': buffer_exit(); break;
-                }
-            }
+            mini_buffer_execute_command(buffer, minibuffer.content == "w", &save);
+            mini_buffer_execute_command(buffer, minibuffer.content == "q", &buffer_exit);
 
             minibuffer.content.clear();
             buffer.mode = Mode::NORMAL;
@@ -348,7 +362,7 @@ void buffer_handle_command(Buffer& buffer, MiniBuffer& minibuffer) {
 }
 
 void initialize_graphics() {
-    InitWindow(1280, 720, "Editor de Texto");
+    InitWindow(1280, 720, "dc-editor");
     SetTargetFPS(60);
     SetExitKey(0);
 }
@@ -366,6 +380,7 @@ void run_editor() {
     MiniBuffer miniBuffer;
     mini_buffer_initialize(miniBuffer);
 
+    // INIT Main loop...
         while (!WindowShouldClose()) {
             BeginDrawing();
                 buffer_handle_text_input(buffer);
@@ -375,6 +390,7 @@ void run_editor() {
                 buffer_draw(buffer);
             EndDrawing();
         }
+    // END Main loop.
 
     close_graphics();
 }
